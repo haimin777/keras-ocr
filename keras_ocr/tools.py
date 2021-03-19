@@ -660,14 +660,8 @@ class BboxLayer(tf.keras.layers.Layer):
         xyhw = tf.stack(xyhw)
         xyhw = tf.transpose(xyhw)
 
-        cleared_xyhw = self.clear_coords(xyhw)
 
-        # check for empty screens:
-
-        if tf.equal(tf.size(cleared_xyhw), 0):
-            return xyhw
-        else:
-            return cleared_xyhw
+        return xyhw
 
 
 class GrayScaleLayer(tf.keras.layers.Layer):
