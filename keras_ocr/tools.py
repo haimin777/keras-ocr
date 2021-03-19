@@ -664,10 +664,10 @@ class BboxLayer(tf.keras.layers.Layer):
 
         # check for empty screens:
 
-        if len(cleared_xyhw) > 0:
-            return cleared_xyhw
-        else:
+        if tf.equal(tf.size(cleared_xyhw), 0):
             return xyhw
+        else:
+            return cleared_xyhw
 
 
 class GrayScaleLayer(tf.keras.layers.Layer):
