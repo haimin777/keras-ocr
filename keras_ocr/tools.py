@@ -656,6 +656,11 @@ class BboxLayer(tf.keras.layers.Layer):
         xyhw = tf.map_fn(fn=self.get_bboxes, elems=dlate_component, dtype=(tf.int32, tf.int32, tf.int32, tf.int32))
 
         # result is [x[0..elem_num], y[0..elem_num],h[0..elem_num], w[0..elem_num] ]. Need Stack and transpose for receive single tensor
+
+        xyhw = tf.stack(xyhw)
+
+        xyhw = tf.transpose(xyhw)
+
         cleared_xyhw = self.clear_coords(xyhw)
 
 
