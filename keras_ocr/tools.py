@@ -676,11 +676,11 @@ class GrayScaleLayer(tf.keras.layers.Layer):
     def call(self, input):
         input_shape = array_ops.shape(input)
 
-        img_hd = input_shape[1] / 2
-        img_wd = input_shape[2] / 2
+        img_hd = input_shape[1] #/ 2
+        img_wd = input_shape[2] #/ 2
         input = tf.image.resize(input, [img_hd, img_wd])
 
-        return tf.cast(tf.image.rgb_to_grayscale(input), tf.uint8) / 255
+        return tf.cast(tf.image.rgb_to_grayscale(input), tf.uint8) #/ 255
 
 
 class CropBboxesLayer(tf.keras.layers.Layer):  # (PreprocessingLayer):
@@ -691,7 +691,7 @@ class CropBboxesLayer(tf.keras.layers.Layer):  # (PreprocessingLayer):
                     target_width=200):
         ## for recognition ##
 
-        crop = tf.image.crop_to_bounding_box(self.image, box[0], box[1], box[2], box[3])
+        crop = tf.image.crop_to_bounding_box(self.image, box[0] *2, box[1]*2, box[2]*2, box[3]*2)
         scale = tf.math.minimum(target_width / box[3], target_height / box[2])
 
         scaled_shape = [tf.cast(box[2], tf.float64) * scale, tf.cast(box[3], tf.float64) * scale]
