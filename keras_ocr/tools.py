@@ -680,7 +680,7 @@ class GrayScaleLayer(tf.keras.layers.Layer):
         img_wd = input_shape[2] #/ 2
         input = tf.image.resize(input, [img_hd, img_wd])
 
-        return tf.cast(tf.image.rgb_to_grayscale(input), tf.uint8) #/ 255
+        return tf.cast(tf.image.rgb_to_grayscale(input), tf.uint8) / 255
 
 
 class CropBboxesLayer(tf.keras.layers.Layer):  # (PreprocessingLayer):
