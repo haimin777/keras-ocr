@@ -556,6 +556,9 @@ def decode_bbox(bboxes, bbox_num, res):
 class ComputeInputLayer(tf.keras.layers.Layer):
 
     def call(self, input):
+
+        input = tf.image.resize(input, (1080, 500)) # not for production!!!!
+
         mean = tf.constant([123.6, 116.3, 103.5])
         variance = tf.constant([58.3, 57.12, 57.38])
 
