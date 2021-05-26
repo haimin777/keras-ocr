@@ -29,7 +29,7 @@ from tensorflow.python.framework import tensor_shape
 from tensorflow.python.framework import ops
 
 from tensorflow.python.ops import array_ops
-from keras import layers
+from tensorflow.keras import layers
 from tensorflow_addons.utils.resource_loader import LazySO
 from tensorflow_addons.image import connected_components
 _image_so = LazySO("custom_ops/image/_image_ops.so")
