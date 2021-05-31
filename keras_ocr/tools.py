@@ -931,7 +931,7 @@ def count_precision(xml_file, predict_file):
            precision(other, predict_file)
 
 
-def quality_df(images_paths, xmls_paths, pipeline):
+def quality_df(images_paths, xmls_paths, pipeline, resize=True):
     quality_results = {
         'image_name': [],
         'card_acc': [],
@@ -943,6 +943,8 @@ def quality_df(images_paths, xmls_paths, pipeline):
     for xml, img in tqdm.notebook.tqdm(zip(xmls_paths, images_paths)):
         #inp = read(img)
         inp = cv2.imread(img)
+        if resize:
+            inp = cv2.resize(inp, (500, 1080))
         inp = np.expand_dims(inp, 0)
         predict_list = pipeline.recognize(inp)[0]
         try:
