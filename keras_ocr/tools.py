@@ -941,7 +941,8 @@ def quality_df(images_paths, xmls_paths, pipeline):
     images_paths.sort()
     xmls_paths.sort()
     for xml, img in tqdm.notebook.tqdm(zip(xmls_paths, images_paths)):
-        inp = read(img)
+        #inp = read(img)
+        inp = cv2.imread(img)
         inp = np.expand_dims(inp, 0)
         predict_list = pipeline.recognize(inp)[0]
         try:
