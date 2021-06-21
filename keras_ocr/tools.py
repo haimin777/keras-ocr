@@ -750,12 +750,12 @@ def create_one_grap_model(detector_weights, recognizer_weights, recognizer_alpha
     # if debug - output bbox images, not rectangles
     # build_params - for recognition part
 
-    if model_mode == 0: # from get_recognition_part return prediction_model
-      recognizer_predict_model = get_recognition_part(recognizer_weights, recognizer_alphabet, build_params)[0]
-    elif model_mode == 1: # from get_recognition_part return just model
-      recognizer_predict_model = get_recognition_part(recognizer_weights, recognizer_alphabet, build_params)[1]
 
-    recognizer_predict_model = get_recognition_part(recognizer_weights, recognizer_alphabet, build_params)
+    ## model_mode -- 0 - return prediction_model, 1-return ctc+probability
+
+
+    recognizer_predict_model = get_recognition_part(recognizer_weights, recognizer_alphabet, build_params)[model_mode]
+
     detector = detection.Detector(weights='clovaai_general')
 
     detector.model.load_weights(detector_weights)
