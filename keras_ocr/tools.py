@@ -737,16 +737,24 @@ class DecodeBoxLayer(tf.keras.layers.Layer):
 
 def get_recognition_part(weights, recognizer_alphabet, build_params):
     backbone, model, training_model, prediction_model = recognition.build_model(recognizer_alphabet, **build_params)
-
-
     prediction_model.load_weights(weights)
+    ####
+    ctc = recognition.CTCDecoder()(model.output)
+    ctc_model = tf.keras.models.Model(inputs=model.input, outputs=[ctc, model.output])
+    ####
 
-    return prediction_model
+    return prediction_model, ctc_model
 
 
-def create_one_grap_model(detector_weights, recognizer_weights, recognizer_alphabet, prod=False, build_params=recognition.DEFAULT_BUILD_PARAMS):
+def create_one_grap_model(detector_weights, recognizer_weights, recognizer_alphabet,model_mode=1, prod=False, build_params=recognition.DEFAULT_BUILD_PARAMS):
     # if debug - output bbox images, not rectangles
     # build_params - for recognition part
+
+    if model_mode == 0: # from get_recognition_part return prediction_model
+      recognizer_predict_model = get_recognition_part(recognizer_weights, recognizer_alphabet, build_params)[0]
+    elif model_mode == 1: # from get_recognition_part return just model
+      recognizer_predict_model = get_recognition_part(recognizer_weights, recognizer_alphabet, build_params)[1]
+
     recognizer_predict_model = get_recognition_part(recognizer_weights, recognizer_alphabet, build_params)
     detector = detection.Detector(weights='clovaai_general')
 
@@ -815,6 +823,44 @@ class OneGraphPipeline():
         char_groups = self.decode_prediction(raw_predict[1])
 
         return self.get_prediction_groups(raw_predict[0], char_groups)
+
+    def _max_val_index(self, array):
+
+        # to calc max prob index from array
+
+        return np.argmax(array)
+
+    def _convert_to_chargroup(self, probability_array):
+
+        # convert array with prob to list with index letter and number prob list
+
+        probability_list = []
+        for box in probability_array:
+            probability = 1
+            for j in box:
+                index = self._max_val_index(j)
+                probability *= j[index]  # to calculate overall probability we multyply probs of all recognized chars
+            probability_list += [probability]
+
+        return probability_list
+
+    def _get_triple_prediction_groups(self, bboxes, char_groups, probability):
+        return [list(zip(predictions, boxes, probability)) for predictions, boxes, \
+                                                               probability in
+                zip([char_groups], [bboxes], [probability])]
+
+    def recognize_with_probability(self, images):
+        # predict
+
+        prediction = self.model.predict([images])  # [ctc, model.output]
+        raw_predict = prediction[1]
+        # convert to char groups and probability
+        probability_groups = self._convert_to_chargroup(raw_predict[1])
+        # char_groups = self.decode_prediction(indexes)
+        char_groups = self.decode_prediction(prediction[1][0])
+        # make triple prediction groups
+
+        return self._get_triple_prediction_groups(prediction[0], char_groups, probability_groups)
 
 
 def initialize_image_ops():
