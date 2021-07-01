@@ -537,27 +537,11 @@ def fix_line(line):
 
 ###### One graph utils ############
 
-@tf.function
-def decode_bbox(bboxes, bbox_num, res):
-    "decodes from [y, x,  h, w] to [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]"
-    for i in tf.range(bbox_num):
-        x1, x2, y1, y2 = bboxes[i][1] * 2, (bboxes[i][1] + bboxes[i][3]) * 2, bboxes[i][0] * 2, (
-                    bboxes[i][0] + bboxes[i][2]) * 2
-        # rescale
-        res = res.write(i, [[x1, y1],
-                            [x2, y1],
-                            [x2, y2],
-                            [x1, y2]])
-
-    return res.stack()
-
-
 
 class ComputeInputLayer(tf.keras.layers.Layer):
 
     def call(self, input):
-
-        #input = tf.image.resize(input, (1080, 500)) # not for production!!!!
+        # input = tf.image.resize(input, (1080, 500)) # not for production!!!!
 
         mean = tf.constant([123.6, 116.3, 103.5])
         variance = tf.constant([58.3, 57.12, 57.38])
@@ -572,7 +556,7 @@ class BboxLayer(tf.keras.layers.Layer):
     def __init__(self):
         # for dilation
 
-        self.filters = tf.ones([3, 3, 1], dtype=tf.dtypes.int32)
+        self.filters = tf.ones([3, 3, 1], dtype=tf.float32)
         self.strides = [1., 1., 1., 1.]
         self.padding = "SAME"
         self.dilations = [1., 2., 2., 1.]
@@ -581,97 +565,145 @@ class BboxLayer(tf.keras.layers.Layer):
         # self.num_outputs = num_outputs
         # pass
 
-    def build(self, input_shape):
-        input_shape = tensor_shape.TensorShape(input_shape).as_list()
+    def get_bboxes(self, input):
+        # : Tensor where every layer is single dlated connected component area
+        # input = tf.cast(input, tf.float32)
+        coords_tensor_y = tf.where(tf.argmax(input, axis=0))
+        coords_tensor_x = tf.where(tf.argmax(input, axis=1))
 
+        y1 = tf.reduce_max(coords_tensor_y)
+        y2 = tf.reduce_min(coords_tensor_y)
+
+        x1 = tf.reduce_max(coords_tensor_x)
+        x2 = tf.reduce_min(coords_tensor_x)
+
+        w = x1 - x2
+        h = y1 - y2
+
+        x2 = tf.cast(x2, tf.int32)
+        y2 = tf.cast(y2, tf.int32)
+        w = tf.cast(w, tf.int32)
+        h = tf.cast(h, tf.int32)
+        '''
+
+        x2 = tf.cast(x2, tf.float32)
+        y2 = tf.cast(y2, tf.float32)
+        w = tf.cast(w, tf.float32)
+        h = tf.cast(h, tf.float32)
+        '''
+        return x2, y2, w, h  ##!!!
+
+    '''
     def get_bboxes(self, input):
         # : Tensor where every layer is single dlated connected component area
 
         coords_tensor = tf.where(input)
 
-        coords_tensor = tf.cast(coords_tensor, tf.int32)
+        coords_tensor = tf.cast(coords_tensor, tf.float32)
         y1 = tf.reduce_max(coords_tensor[:, 0])
         y2 = tf.reduce_min(coords_tensor[:, 0])
 
         x1 = tf.reduce_max(coords_tensor[:, 1])
         x2 = tf.reduce_min(coords_tensor[:, 1])
 
-        w = tf.cast(x1 - x2, tf.int32)
-        h = tf.cast(y1 - y2, tf.int32)
+        w = tf.cast(x1 - x2, tf.float32)
+        h = tf.cast(y1 - y2, tf.float32)
 
-        return y2, x2, h, w
+        return y2, x2, h, w   
+    '''
 
-    def clear_coords(self, xyhw):
-        # : input - raw list of xyhw tensors
+    def get_bboxes_batch(self, input):
+        bbox_batch = tf.map_fn(fn=self.get_bboxes,
+                               elems=input,
+                               dtype=(tf.int32, tf.int32, tf.int32, tf.int32)
+                               # dtype=(tf.float32, tf.float32, tf.float32, tf.float32 )
 
-        index = tf.math.logical_and(xyhw[:, 2] < 300, xyhw[:, 2] > 4)
-        return xyhw[index]
+                               )
 
-    def call(self, input):
-        input_shape = array_ops.shape(input)
+        return bbox_batch
 
-        textmap = tf.identity(input[0, :, :, 0])
-        self.textmap = textmap
-        linkmap = tf.identity(input[0, :, :, 1])
-
-        textmap = tf.where(textmap > 0.4, 1.0, 0)
-        linkmap = tf.where(linkmap > 0.4, 1.0, 0)
-        res_img = tf.image.convert_image_dtype(tf.clip_by_value((textmap + linkmap), 0, 1), tf.float32)
-
-        res_img = image_tfa.connected_components(res_img)
-        # self.res_img = res_img
-        elem_num = tf.reduce_max(res_img) + 1
-
-        # separate connected components to different layers
-        # Transform connected components image to matrix [elem_num x H x W]
-
-        # area_ids_vector = tf.range(elem_num)
-        components_ids_vector = tf.range(elem_num)
-
-        components_ids_matrix = tf.tensordot(components_ids_vector, tf.ones_like(res_img),
-                                             axes=0)  # now every connected components id has its own layer
-
-        # create mask matrix
-        connected_components_img_matrix = tf.tensordot(tf.ones_like(components_ids_vector), res_img,
-                                                       axes=0)  # create [elem_num x H x W] tensor
-
-        connected_components_img_matrix = tf.where(connected_components_img_matrix == components_ids_matrix, 1, 0)
-
-        # dlate every layers mask to increase bbox area
-
-        connected_components_img_matrix = tf.expand_dims(connected_components_img_matrix, -1)
-
-        dlate_component = tf.nn.dilation2d(connected_components_img_matrix,
+    def dlate_connected_components(self, input):
+        dlate_component = tf.nn.dilation2d(input,
                                            self.filters,
                                            self.strides,
                                            self.padding,
 
                                            "NHWC",
-                                           self.dilations)[:, :, :, 0]
+                                           self.dilations)  # [:,:,:,0]
 
-        dlate_component = tf.where(dlate_component == 1, False, True)
+        return dlate_component
 
-        # calculate index of dlatet regions where text value < 0.7 and drop them
-        # text_index = tf.map_fn(fn=self.calculate_max_text_value_index, elems=dlate_component)
+    def expand_img(self, img):
+        exp = tf.ones(self.elem_num, dtype=tf.float32)
 
-        # dlate_component = dlate_component[text_index]
+        return tf.tensordot(exp, img, axes=0)
 
-        xyhw = tf.map_fn(fn=self.get_bboxes, elems=dlate_component, dtype=(tf.int32, tf.int32, tf.int32, tf.int32))
+    def clear_coords(self, xyhw):
+        # : input - raw list of xyhw tensors
 
-        # result is [x[0..elem_num], y[0..elem_num],h[0..elem_num], w[0..elem_num] ]. Need Stack and transpose for receive single tensor
+        index = tf.math.logical_and(xyhw[:, :, 2] < 300, xyhw[:, :, 2] > 4)
+        return xyhw[index]
+
+    def produce_connected_components_batch(self, input):
+        components_vector = tf.range(1, input[1] + 1)
+
+        return tf.tensordot(components_vector, tf.ones_like(input[0], tf.int32), axes=0)
+
+    def produce_image_batch(self, input):
+        bbox_dimention = tf.ones([self.elem_num], tf.int32)  # tf.range(1, 55)
+
+        # return tf.tensordot(tf.ones(([self.elem_num], tf.int32)), input, axes=0)
+        return tf.tensordot(bbox_dimention, input, axes=0)
+
+    def call(self, input):
+        textmap = input[:, :, :, 0]
+
+        self.textmap = textmap
+        # linkmap = tf.identity(input[0,:,:, 1])
+        linkmap = input[:, :, :, 1]
+
+        textmap = tf.where(textmap > 0.4, 1.0, 0)
+        linkmap = tf.where(linkmap > 0.4, 1.0, 0)
+        res_img = tf.clip_by_value((textmap + linkmap), 0, 1)
+
+        res_img = tf.map_fn(fn=image_tfa.connected_components, elems=res_img, dtype=tf.int32)
+        res_img_shape = array_ops.shape(res_img)
+
+        elem_num = tf.reduce_max(res_img) + 1
+        self.elem_num = elem_num
+
+        # create [batch x elem_num(max value)]
+        elem_num = tf.ones(res_img_shape[0], tf.int32) * elem_num
+
+        # separate connected components to different layers
+
+        components_ids_matrix = tf.map_fn(fn=self.produce_connected_components_batch, elems=[res_img, elem_num],
+                                          dtype=tf.int32)
+
+        connected_components_img_matrix = tf.map_fn(fn=self.produce_image_batch, elems=res_img,
+                                                    dtype=tf.int32)  # tf.where(components_ids_matrix == res_img, 1., 0.)
+        # Transform connected components image to matrix [batch x elem_num x H x W]
+
+        connected_components_img_matrix = tf.where(components_ids_matrix == connected_components_img_matrix, 1., 0.)
+
+        # dlate every layers mask to increase bbox area
+
+        connected_components_img_matrix = tf.expand_dims(connected_components_img_matrix, -1)
+
+        dlated_components_batch = tf.map_fn(fn=self.dlate_connected_components, elems=connected_components_img_matrix,
+                                            dtype=tf.float32)[:, :, :, :, 0]
+
+        xyhw = tf.map_fn(fn=self.get_bboxes_batch,
+                         elems=dlated_components_batch,
+                         dtype=(tf.int32, tf.int32, tf.int32, tf.int32))
 
         xyhw = tf.stack(xyhw)
-
+        xyhw = tf.map_fn(tf.transpose, xyhw, dtype=tf.int32)
         xyhw = tf.transpose(xyhw)
+        # replace -1 for 0
+        xyhw = tf.where(xyhw == -1, 0, xyhw)
 
-        cleared_xyhw = self.clear_coords(xyhw)
-
-
-        result = tf.cond(tf.equal(tf.size(cleared_xyhw), 0),
-                         lambda: xyhw,
-                         lambda: cleared_xyhw)
-
-        return result
+        return xyhw
 
 
 class GrayScaleLayer(tf.keras.layers.Layer):
@@ -679,8 +711,8 @@ class GrayScaleLayer(tf.keras.layers.Layer):
     def call(self, input):
         input_shape = array_ops.shape(input)
 
-        img_hd = input_shape[1] #/ 2
-        img_wd = input_shape[2] #/ 2
+        img_hd = input_shape[1]  # / 2
+        img_wd = input_shape[2]  # / 2
         input = tf.image.resize(input, [img_hd, img_wd])
 
         return tf.cast(tf.image.rgb_to_grayscale(input), tf.uint8) / 255
@@ -688,32 +720,47 @@ class GrayScaleLayer(tf.keras.layers.Layer):
 
 class CropBboxesLayer(tf.keras.layers.Layer):  # (PreprocessingLayer):
 
-    def resize_crop(self,
-                    box,
-                    target_height=31,
-                    target_width=200):
-        ## for recognition ##
+    def my_crop(self, inp, target_height=31,
+                target_width=200):
+        bbox = inp[1]
+        crop = tf.image.crop_to_bounding_box(inp[0], bbox[0], bbox[1], bbox[2], bbox[3])
 
-        crop = tf.image.crop_to_bounding_box(self.image, box[0] *2, box[1]*2, box[2]*2, box[3]*2)
-        scale = tf.math.minimum(target_width / box[3], target_height / box[2])
+        # resize crop
+        scale = tf.math.minimum(target_width / bbox[3], target_height / bbox[2])
+        scale = tf.cast(scale, tf.float32)
 
-        scaled_shape = [tf.cast(box[2], tf.float64) * scale, tf.cast(box[3], tf.float64) * scale]
-        scaled_shape = tf.cast(scaled_shape, tf.int32)
+        scaled_shape = [tf.cast(bbox[2], tf.float32) * scale, tf.cast(bbox[3], tf.float32) * scale]
+
         # calculate padding for target w, h
         pad_h = target_height - tf.cast(scaled_shape[0], tf.int32)
         pad_w = target_width - tf.cast(scaled_shape[1], tf.int32)
+        result_img = tf.image.resize(crop, scaled_shape)
 
-        result_img = tf.image.resize(crop, scaled_shape)[0]
         result_img = tf.pad(result_img, [[pad_h, 0], [0, pad_w], [0, 0]], "CONSTANT", constant_values=0)
 
-        return result_img  # tf.image.resize(crop, scaled_shape)
+        return result_img
+
+    def resize_crop(self, inputs):
+        ## for recognition ##
+
+        # inputs:55x500x1080x1 | 55x4
+        crop = tf.map_fn(fn=self.my_crop, elems=inputs, dtype=tf.float32)
+
+        return crop
+
+    def transform_inp_image(self, inputs):
+        # 3x500x1080x1 -> 3x55x500x1080x1
+
+        return tf.tensordot(tf.ones_like(inputs[1][:, 0], tf.float32), inputs[0], axes=0)
 
     def call(self, inputs):
-        # inputs [image, bboxes]
+        # inputs:[image, bboxes] | 3x500x1080x1, 3x55x4
 
-        self.image = inputs[0]
+        transformed_input_images = tf.map_fn(fn=self.transform_inp_image, elems=inputs, dtype=tf.float32)
 
-        return tf.map_fn(fn=self.resize_crop, elems=inputs[1], dtype=tf.float32)
+        crops = tf.map_fn(fn=self.resize_crop, elems=[transformed_input_images, inputs[1] * 2], dtype=tf.float32)
+        return crops
+
 
 class DecodeCharLayer(tf.keras.layers.Layer):
 
@@ -728,11 +775,45 @@ class DecodeCharLayer(tf.keras.layers.Layer):
 
 class DecodeBoxLayer(tf.keras.layers.Layer):
 
-    def call(self, input):
-        box_num = array_ops.shape(input)[0]
-        res = tf.TensorArray(tf.int32, size=0, dynamic_size=True, clear_after_read=False)
+    def decode_one_bbox(self, bboxes):
+        x1, x2, y1, y2 = bboxes[1] * 2, (bboxes[1] + bboxes[3]) * 2, bboxes[0] * 2, (bboxes[0] + bboxes[2]) * 2
 
-        return decode_bbox(input, box_num, res)
+        return tf.stack([[x1, y1],
+                         [x2, y1],
+                         [x2, y2],
+                         [x1, y2]])
+
+    def decode_one_image_bboxes(self, bboxes):
+        # return tf.map_fn(fn=self.decode_one_bbox, elems=bboxes, dtype=[[tf.int32, tf.int32], [tf.int32, tf.int32], [tf.int32, tf.int32], [tf.int32, tf.int32]])
+        return tf.map_fn(fn=self.decode_one_bbox, elems=bboxes, dtype=tf.int32)
+
+    def call(self, input):
+        return tf.map_fn(fn=self.decode_one_image_bboxes, elems=input, dtype=tf.int32)
+        # return tf.map_fn(fn=self.decode_one_image_bboxes, elems=input,
+        # dtype=[[tf.int32, tf.int32], [tf.int32, tf.int32], [tf.int32, tf.int32], [tf.int32, tf.int32]])
+
+
+class BatchRecognizeLayer(tf.keras.layers.Layer):
+
+    def __init__(self, recognizer, prob_score_display):
+        super(BatchRecognizeLayer, self).__init__()
+        self.recognizer = recognizer
+        self.prob_score_display = prob_score_display
+
+    def call(self, input):
+        # input: (cropped bbox batch, recognizer)
+
+        bboxes = input
+        if self.prob_score_display:
+            rec_batch = tf.map_fn(fn=self.recognizer, elems=bboxes,
+                                  dtype=[tf.int64, tf.float32])  # return [bbox, prob_score]
+
+            return rec_batch
+
+        else:
+            rec_batch = tf.map_fn(fn=self.recognizer, elems=bboxes, dtype=tf.int64)
+
+            return rec_batch
 
 
 def get_recognition_part(weights, recognizer_alphabet, build_params):
@@ -746,15 +827,15 @@ def get_recognition_part(weights, recognizer_alphabet, build_params):
     return prediction_model, ctc_model
 
 
-def create_one_grap_model(detector_weights, recognizer_weights, recognizer_alphabet,model_mode=1, prod=False, build_params=recognition.DEFAULT_BUILD_PARAMS):
+def create_one_grap_model(detector_weights, recognizer_weights, recognizer_alphabet, prod=False,
+                          build_params=recognition.DEFAULT_BUILD_PARAMS):
     # if debug - output bbox images, not rectangles
     # build_params - for recognition part
 
-
     ## model_mode -- 0 - return prediction_model, 1-return ctc+probability
 
-
-    recognizer_predict_model = get_recognition_part(recognizer_weights, recognizer_alphabet, build_params)[model_mode]
+    recognizer_predict_model = get_recognition_part(recognizer_weights, recognizer_alphabet, build_params)[int(prod)]
+    # recognition part return 2 models. First is for debug(prod=False), second for production (prod=True)
 
     detector = detection.Detector(weights='clovaai_general')
 
@@ -769,18 +850,22 @@ def create_one_grap_model(detector_weights, recognizer_weights, recognizer_alpha
 
     grayscale_model = GrayScaleLayer()(rec_inp)
 
-    rec_model_func = tf.keras.models.Model(inputs=rec_inp, outputs=[bbox_model, grayscale_model])
+    bboxes_model = CropBboxesLayer()([grayscale_model, bbox_model])  # cropped patches (BATCH x Num_BBOX x 31 x 200)
 
-    bboxes_model = CropBboxesLayer()([grayscale_model, bbox_model])
-    bboxes_model = keras.models.Model(inputs=rec_inp, outputs=bboxes_model)
-    final_model = recognizer_predict_model(bboxes_model.output)
     if prod:
+
+        batch_rec_layer = BatchRecognizeLayer(recognizer_predict_model,
+                                              prob_score_display=True)  # create layer with prob_score display
+        batch_rec_layer = batch_rec_layer(bboxes_model)
         # xyhw bbox format
-        return keras.models.Model(inputs=rec_inp, outputs=[bbox_model, final_model, ])
+        return keras.models.Model(inputs=rec_inp, outputs=[batch_rec_layer, bbox_model])
 
     else:
+        batch_rec_layer = BatchRecognizeLayer(recognizer_predict_model, prob_score_display=False)  # create layer
+        batch_rec_layer = batch_rec_layer(bboxes_model)
         decoded_bboxes = DecodeBoxLayer()(bbox_model)
-        return keras.models.Model(inputs=rec_inp, outputs=[decoded_bboxes, final_model, ])  # result for  [[4,2]] bbox shape
+        return keras.models.Model(inputs=rec_inp,
+                                  outputs=[[batch_rec_layer], decoded_bboxes])  # result for  [[4,2]] bbox shape
 
 
 # create pipeline from one graph model
@@ -800,10 +885,16 @@ class OneGraphPipeline():
 
         return predictions
 
+    def decode_batch_prediction(self, batch_raw_predict):
+
+        return [self.decode_prediction(raw) for raw in batch_raw_predict]
+
     def get_prediction_groups(self, bboxes, char_groups):
         return [
             list(zip(predictions, boxes))
-            for predictions, boxes in zip([char_groups], [bboxes])
+            # for predictions, boxes in zip([char_groups], [bboxes])
+            for predictions, boxes in zip(char_groups, bboxes)
+
         ]
 
     def compute_input(self, image):
@@ -816,51 +907,60 @@ class OneGraphPipeline():
         image /= variance
         return image
 
-    def recognize(self, images):
-        # images = self.compute_input(images)
-
-        raw_predict = self.model.predict([images])
-        char_groups = self.decode_prediction(raw_predict[1])
-
-        return self.get_prediction_groups(raw_predict[0], char_groups)
-
     def _max_val_index(self, array):
 
         # to calc max prob index from array
 
         return np.argmax(array)
 
-    def _convert_to_chargroup(self, probability_array):
+    def _convert_to_chargroup(self, prob_score_batch):
 
         # convert array with prob to list with index letter and number prob list
+        batch = []
+        for probability_array in prob_score_batch:
+            probability_list = []
 
-        probability_list = []
-        for box in probability_array:
-            probability = 1
-            for j in box:
-                index = self._max_val_index(j)
-                probability *= j[index]  # to calculate overall probability we multyply probs of all recognized chars
-            probability_list += [probability]
+            for box in probability_array:
+                probability = 1
+                for j in box:
+                    index = self._max_val_index(j)
+                    probability *= j[
+                        index]  # to calculate overall probability we multyply probs of all recognized chars
+                probability_list += [probability]
+            batch.append(probability_list)
 
-        return probability_list
+        return batch
 
     def _get_triple_prediction_groups(self, bboxes, char_groups, probability):
         return [list(zip(predictions, boxes, probability)) for predictions, boxes, \
                                                                probability in
-                zip([char_groups], [bboxes], [probability])]
+                zip(char_groups, bboxes, probability)]
+
+    def recognize(self, images):
+        # images = self.compute_input(images)
+
+        raw_predict = self.model.predict([images])
+        char_groups = self.decode_batch_prediction(raw_predict[0][0])
+
+        return self.get_prediction_groups(raw_predict[1], char_groups)
 
     def recognize_with_probability(self, images):
         # predict
-
-        prediction = self.model.predict([images])  # [ctc, model.output]
-        raw_predict = prediction[1]
+        '''
+        prediction = self.model.predict([images])
+        raw_predict = prediction[0]
         # convert to char groups and probability
-        probability_groups = self._convert_to_chargroup(raw_predict[1])
         # char_groups = self.decode_prediction(indexes)
-        char_groups = self.decode_prediction(prediction[1][0])
+        char_groups = self.decode_batch_prediction(raw_predict[0][0])
         # make triple prediction groups
+        '''
+        raw_predict = self.model.predict([images])
 
-        return self._get_triple_prediction_groups(prediction[0], char_groups, probability_groups)
+        char_groups = self.decode_batch_prediction(raw_predict[0][0])
+        probability_groups = self._convert_to_chargroup(raw_predict[0][1])
+
+        # return probability_groups #self._get_triple_prediction_groups(prediction[1], char_groups, probability_groups)
+        return self._get_triple_prediction_groups(raw_predict[1], char_groups, probability_groups)
 
 
 def initialize_image_ops():
@@ -987,7 +1087,6 @@ def quality_df(images_paths, xmls_paths, pipeline, resize=True):
     images_paths.sort()
     xmls_paths.sort()
     for xml, img in tqdm.notebook.tqdm(zip(xmls_paths, images_paths)):
-        #inp = read(img)
         inp = cv2.imread(img)
         if resize:
             inp = cv2.resize(inp, (500, 1080))
@@ -1003,4 +1102,3 @@ def quality_df(images_paths, xmls_paths, pipeline, resize=True):
             print('empty xml', e)
     res_df = pd.DataFrame(quality_results)
     return res_df
-
