@@ -1087,7 +1087,8 @@ def quality_df(images_paths, xmls_paths, pipeline, resize=True):
     images_paths.sort()
     xmls_paths.sort()
     for xml, img in tqdm.notebook.tqdm(zip(xmls_paths, images_paths)):
-        inp = cv2.imread(img)
+        #inp = cv2.imread(img)
+        inp = read(img)
         if resize:
             inp = cv2.resize(inp, (500, 1080))
         inp = np.expand_dims(inp, 0)
